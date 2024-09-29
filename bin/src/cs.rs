@@ -25,8 +25,11 @@ use serde::{Deserialize, Serialize};
 use std::{ffi::{c_char, c_void, CString}, fmt::Debug, process::ExitCode};
 include!("cs_bindings.rs");
 
-use tokio::net::tcp::TcpStream;
-use tokio::prelude::*;
+use std::process;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::peer::*;
 
 #[derive(Args, Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct ServerArgs {
@@ -76,24 +79,19 @@ pub fn run_connect(connect_args: ConnectArgs) {
     };
     let (args, go_str) = convert_to_go_slices(&args);
     info!("Run connect cmd.");
-    let addr = "127.0.0.1:7000".parse().unwrap();
-    let echo_fut = TcpStream::connect(&addr)
-        .and_then(|stream| {
-            // First, we need to get a separate read and write handle for
-            // the connection so that we can forward one to the other.
-            // See "Split I/O resources" below for more details.
-            let (connect_reader, connect_writer) = stream.split();
-            // Then, we can use copy to send all the read bytes to the
-            // writer, and return how many bytes it read/wrote.
-            let reader = Arc::new(Mutex::new(connect_reader));
-            let writer = Arc::new(Mutex::new(connect_writer));
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.spawn(async move {
-                if let Err(e) = process(reader, writer).await {
-                    eprintln!("process p2p addr: {}", e, addr);
-                    process::exit(1);
-            };
-        });
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async move {
+        let addr = "127.0.0.1:7000";
+        info!("Runtime started.");
+        let mut stream = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let (connect_reader, connect_writer) = stream.into_split();
+        info!("connect to client.");
+        // let reader = Arc::new(Mutex::new(connect_reader));
+        // let writer = Arc::new(Mutex::new(connect_writer));
+        if let Err(e) = process(connect_reader, connect_writer).await {
+            eprintln!("process p2p: {}", e);
+            process::exit(1);
+        };
     });
     // TODO
 }
